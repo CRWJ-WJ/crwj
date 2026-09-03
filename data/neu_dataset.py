@@ -1,12 +1,21 @@
 import os
+import sys
+
 import cv2
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE not in sys.path:
+    sys.path.insert(0, BASE)
+from cv_utils import cv_imread
+
 
 class NEUDataset(Dataset):
+    """NEU 表面缺陷图像分类数据集（配合 data_preprocess.py 生成的目录结构）。"""
+
     def __init__(self, root, csv_file, transform=None):
         self.root = root
         self.df = pd.read_csv(csv_file)
@@ -18,7 +27,7 @@ class NEUDataset(Dataset):
     def __getitem__(self, index):
         row = self.df.iloc[index]
         img_path = os.path.join(self.root, row["cls_name"], row["save_name"])
-        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        img = cv_imread(img_path, cv2.IMREAD_GRAYSCALE)
         label = int(row["label"])
         if self.transform:
             img = self.transform(img)

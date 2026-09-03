@@ -1,17 +1,24 @@
 import os
-import cv2
 import random
+import sys
+
+import cv2
 import numpy as np
 import pandas as pd
 import xml.etree.ElementTree as ET
 from sklearn.model_selection import train_test_split
 
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE not in sys.path:
+    sys.path.insert(0, BASE)
+from cv_utils import cv_imread, cv_imwrite
+
 # ===================== 配置参数（这里路径指向你现在这个NEU‑DET文件夹） =====================
-DATASET_ROOT = "./NEU-DET"
+DATASET_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "NEU-DET")
 IMG_FOLDER = os.path.join(DATASET_ROOT, "IMAGES")
 ANN_FOLDER = os.path.join(DATASET_ROOT, "ANNOTATIONS")
 
-OUTPUT_ROOT = "./neu_processed"
+OUTPUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "neu_processed")
 CLASS_NAMES = [
     "crazing",
     "inclusion",
@@ -82,7 +89,7 @@ def process_dataset():
             continue
         label_idx = CLASS_NAMES.index(cls_name)
 
-        raw_img = cv2.imread(img_path)
+        raw_img = cv_imread(img_path)
         if raw_img is None:
             continue
 
@@ -106,7 +113,7 @@ def process_dataset():
     def save_split(split_df, split_name):
         for _, row in split_df.iterrows():
             out_path = os.path.join(OUTPUT_ROOT, split_name, row["cls_name"], row["save_name"])
-            cv2.imwrite(out_path, row["image_array"])
+            cv_imwrite(out_path, row["image_array"])
         csv_path = os.path.join(OUTPUT_ROOT, f"{split_name}_label.csv")
         split_df[["cls_name", "label", "save_name"]].to_csv(csv_path, index=False)
 
