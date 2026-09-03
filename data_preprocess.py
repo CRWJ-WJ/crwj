@@ -1,129 +1,81 @@
 import os
-import random
-import sys
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import cv2
+import csv
 import numpy as np
-import pandas as pd
-import xml.etree.ElementTree as ET
-from sklearn.model_selection import train_test_split
-
-BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if BASE not in sys.path:
-    sys.path.insert(0, BASE)
-from cv_utils import cv_imread, cv_imwrite
-
-# ===================== 配置参数（这里路径指向你现在这个NEU‑DET文件夹） =====================
-DATASET_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "NEU-DET")
-IMG_FOLDER = os.path.join(DATASET_ROOT, "IMAGES")
-ANN_FOLDER = os.path.join(DATASET_ROOT, "ANNOTATIONS")
-
-OUTPUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "neu_processed")
-CLASS_NAMES = [
-    "crazing",
-    "inclusion",
-    "patches",
-    "pitted_surface",
-    "rolled-in_scale",
-    "scratches"
-]
-IMG_SIZE = (200, 200)
-RANDOM_SEED = 42
-TRAIN_RATIO = 0.7
-VAL_RATIO = 0.15
-TEST_RATIO = 0.15
-
-random.seed(RANDOM_SEED)
-np.random.seed(RANDOM_SEED)
-
-# 创建输出目录
-for split in ["train", "val", "test"]:
-    for cls in CLASS_NAMES:
-        os.makedirs(os.path.join(OUTPUT_ROOT, split, cls), exist_ok=True)
+from config import (
+    IMAGE_DIR, ANNOTATION_DIR, PROCESSED_DIR, CSV_PATH,
+    DEFECT_CLASSES, IMG_SIZE
+)
 
 
-def image_preprocess_vision(img: np.ndarray) -> np.ndarray:
-    """OpenCV预处理：灰度、降噪、ROI截取"""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (3, 3), sigmaX=1.2)
-    h, w = gray.shape
-    roi = gray[int(h*0.1):int(h*0.9), int(w*0.1):int(w*0.9)]
-    roi_resize = cv2.resize(roi, IMG_SIZE)
-    return roi_resize
+def main():
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
 
+    csv_rows = []
+    img_index = 0
 
-def data_augmentation(img: np.ndarray) -> list:
-    """数据增强"""
-    aug_imgs = [img.copy()]
-    aug_imgs.append(cv2.flip(img, 1))
-    aug_imgs.append(cv2.flip(img, 0))
-    aug_imgs.append(cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE))
-    noise = np.random.normal(0, 8, img.shape).astype(np.int16)
-    noisy_img = np.clip(img.astype(np.int16)+noise, 0, 255).astype(np.uint8)
-    aug_imgs.append(noisy_img)
-    return aug_imgs
-
-
-def parse_xml(xml_path):
-    """解析xml，拿到缺陷类别"""
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
-    obj = root.find("object")
-    cls_name = obj.find("name").text
-    return cls_name
-
-
-def process_dataset():
-    all_samples = []
-    img_list = [f for f in os.listdir(IMG_FOLDER) if f.endswith(".jpg")]
-
-    for img_name in img_list:
-        img_path = os.path.join(IMG_FOLDER, img_name)
-        xml_name = img_name.replace(".jpg", ".xml")
-        xml_path = os.path.join(ANN_FOLDER, xml_name)
-
-        if not os.path.exists(xml_path):
-            continue
-        cls_name = parse_xml(xml_path)
-        if cls_name not in CLASS_NAMES:
-            continue
-        label_idx = CLASS_NAMES.index(cls_name)
-
-        raw_img = cv_imread(img_path)
-        if raw_img is None:
+    for label_idx, class_name in enumerate(DEFECT_CLASSES):
+        cls_img_dir = os.path.join(IMAGE_DIR, class_name)
+        if not os.path.isdir(cls_img_dir):
+            print(f"警告：找不到 {cls_img_dir}，跳过")
             continue
 
-        roi_img = image_preprocess_vision(raw_img)
-        aug_list = data_augmentation(roi_img)
+        print(f"处理类别: {class_name}")
 
-        for idx, aug_img in enumerate(aug_list):
-            save_name = f"{cls_name}_{img_name.split('.')[0]}_{idx}.jpg"
-            all_samples.append({
-                "cls_name": cls_name,
-                "label": label_idx,
+        # 支持 bmp、jpg、png 三种格式
+        img_files = [
+            f for f in os.listdir(cls_img_dir)
+            if f.lower().endswith((".bmp", ".jpg", ".png"))
+        ]
+
+        for img_name in img_files:
+            img_path = os.path.join(cls_img_dir, img_name)
+            
+            # 兼容中文路径：先读二进制字节，再解码图片
+            try:
+                with open(img_path, 'rb') as f:
+                    img_bytes = f.read()
+                img_np = np.frombuffer(img_bytes, dtype=np.uint8)
+                img = cv2.imdecode(img_np, cv2.IMREAD_GRAYSCALE)
+            except Exception:
+                continue
+
+            if img is None:
+                continue
+
+            # 统一缩放尺寸
+            img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
+
+            # 保存处理后的图片（兼容中文路径）
+            save_name = f"{class_name}_{img_index}.jpg"
+            save_path = os.path.join(PROCESSED_DIR, save_name)
+            try:
+                ret, img_encoded = cv2.imencode('.jpg', img)
+                if ret:
+                    with open(save_path, 'wb') as f:
+                        f.write(img_encoded.tobytes())
+            except Exception:
+                continue
+
+            csv_rows.append({
                 "save_name": save_name,
-                "image_array": aug_img
+                "label": label_idx,
+                "cls_name": class_name,
+                "bboxes": ""
             })
+            img_index += 1
 
-    df = pd.DataFrame(all_samples)
-    train_df, temp_df = train_test_split(df, train_size=TRAIN_RATIO, random_state=RANDOM_SEED, stratify=df["label"])
-    val_df, test_df = train_test_split(temp_df, train_size=VAL_RATIO/(VAL_RATIO+TEST_RATIO),
-                                       random_state=RANDOM_SEED, stratify=temp_df["label"])
+    # 写入 CSV 标注文件
+    with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["save_name", "label", "cls_name", "bboxes"])
+        writer.writeheader()
+        writer.writerows(csv_rows)
 
-    def save_split(split_df, split_name):
-        for _, row in split_df.iterrows():
-            out_path = os.path.join(OUTPUT_ROOT, split_name, row["cls_name"], row["save_name"])
-            cv_imwrite(out_path, row["image_array"])
-        csv_path = os.path.join(OUTPUT_ROOT, f"{split_name}_label.csv")
-        split_df[["cls_name", "label", "save_name"]].to_csv(csv_path, index=False)
-
-    save_split(train_df, "train")
-    save_split(val_df, "val")
-    save_split(test_df, "test")
-
-    print(f"数据集处理完成！输出目录：{OUTPUT_ROOT}")
-    print(f"训练集:{len(train_df)} 样本，验证集:{len(val_df)} 样本，测试集:{len(test_df)} 样本")
+    print(f"\n预处理完成，共生成 {len(csv_rows)} 条样本")
+    print(f"CSV 已保存至: {CSV_PATH}")
 
 
 if __name__ == "__main__":
-    process_dataset()
+    main()
